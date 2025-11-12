@@ -1,0 +1,71 @@
+AWSTemplateFormatVersion: '2010-09-09'
+# Simple full scan (Free Tier demo). For prod, use GSI/time buckets.
+resp = table.scan()
+items = resp.get('Items', [])
+items = [it for it in items if it.get('ts', 0) >= day_ago]
+
+
+count = len(items)
+by_type = {}
+for it in items:
+et = it.get('event_type', 'unknown')
+by_type[et] = by_type.get(et, 0) + 1
+
+
+summary = {
+'timestamp': datetime.utcnow().isoformat()+"Z",
+'count_24h': count,
+'by_event_type': by_type,
+}
+
+
+key = f"daily_summaries/{datetime.utcnow().strftime('%Y-%m-%d')}.json"
+s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(summary).encode('utf-8'))
+
+
+return {'ok': True, 's3_key': key, 'summary': summary}
+
+
+DailyAggregateRule:
+Type: AWS::Events::Rule
+Properties:
+ScheduleExpression: cron(0 0 * * ? *) # every day at 00:00 UTC
+State: ENABLED
+Targets:
+- Arn: !GetAtt AggregateFunction.Arn
+Id: TargetAggregate
+
+
+PermissionForEventsToInvokeAggregate:
+Type: AWS::Lambda::Permission
+Properties:
+FunctionName: !Ref AggregateFunction
+Action: lambda:InvokeFunction
+Principal: events.amazonaws.com
+SourceArn: !GetAtt DailyAggregateRule.Arn
+
+
+ErrorAlarm:
+Type: AWS::CloudWatch::Alarm
+Properties:
+AlarmName: !Sub ${ProjectName}-${Env}-lambda-errors
+ComparisonOperator: GreaterThanThreshold
+EvaluationPeriods: 1
+MetricName: Errors
+Namespace: AWS/Lambda
+Period: 300
+Statistic: Sum
+Threshold: 1
+Dimensions:
+- Name: FunctionName
+Value: !Ref IngestFunction
+
+
+Outputs:
+ApiBaseUrl:
+Value: !Sub https://${IngestApi}.execute-api.${AWS::Region}.amazonaws.com/dev
+Description: Base URL for POST /event
+TableName:
+Value: !Ref EventsTable
+BackupBucketName:
+Value: !Ref BackupBucket
