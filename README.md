@@ -3,7 +3,7 @@
 ## Overview
 A fully serverless AWS project demonstrating real-world cloud architecture using Free Tier services.
 
-##️ Architecture
+## Architecture
 - **API Gateway** → **Lambda** → **DynamoDB**
 - **S3** for static backups and logs
 - **CloudWatch** for monitoring
