@@ -1,1 +1,1 @@
-{"ok": true, "s3_key": "daily_summaries/2025-11-17.json", "summary": {"timestamp": "2025-11-17T18:00:06.964114Z", "count_24h": 1, "by_event_type": {"click": 1}}}
+{"ok": true, "s3_key": "daily_summaries/2025-11-17.json", "summary": {"timestamp": "2025-11-17T18:45:55.234487Z", "count_24h": 4, "by_event_type": {"view": 1, "signup": 1, "click": 2}}}
