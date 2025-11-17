@@ -1,71 +1,272 @@
 AWSTemplateFormatVersion: '2010-09-09'
-# Simple full scan (Free Tier demo). For prod, use GSI/time buckets.
-resp = table.scan()
-items = resp.get('Items', [])
-items = [it for it in items if it.get('ts', 0) >= day_ago]
+Description: Serverless data ingestion + daily aggregation (Free Tier friendly)
 
+Parameters:
+  ProjectName:
+    Type: String
+    Default: serverless-dashboard
+  Env:
+    Type: String
+    Default: dev
 
-count = len(items)
-by_type = {}
-for it in items:
-et = it.get('event_type', 'unknown')
-by_type[et] = by_type.get(et, 0) + 1
+Resources:
+  IngestFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: ingest-inline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:PutItem
+                Resource: !GetAtt EventsTable.Arn
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
 
+  AggregateFunctionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: aggregate-inline
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:Scan
+                  - dynamodb:Query
+                  - dynamodb:PutItem
+                Resource: !GetAtt EventsTable.Arn
+              - Effect: Allow
+                Action:
+                  - s3:PutObject
+                Resource: !Sub arn:aws:s3:::${BackupBucket}/*
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*'
 
-summary = {
-'timestamp': datetime.utcnow().isoformat()+"Z",
-'count_24h': count,
-'by_event_type': by_type,
-}
+  IngestFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${Env}-ingest
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt IngestFunctionRole.Arn
+      Timeout: 10
+      MemorySize: 256
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EventsTable
+      Code:
+        ZipFile: |
+          import os, json, time, uuid
+          import boto3
 
+          ddb = boto3.resource('dynamodb')
+          table = ddb.Table(os.environ['TABLE_NAME'])
 
-key = f"daily_summaries/{datetime.utcnow().strftime('%Y-%m-%d')}.json"
-s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(summary).encode('utf-8'))
+          def lambda_handler(event, context):
+              body = event.get('body') if isinstance(event, dict) else None
+              if body and isinstance(body, str):
+                  try:
+                      payload = json.loads(body)
+                  except json.JSONDecodeError:
+                      return {"statusCode": 400, "body": json.dumps({"error": "Invalid JSON"})}
+              elif isinstance(event, dict):
+                  payload = event.get('payload', {})
+              else:
+                  payload = {}
 
+              item = {
+                  'pk': str(uuid.uuid4()),
+                  'ts': int(time.time()),
+                  'source': payload.get('source', 'unknown'),
+                  'event_type': payload.get('event_type', 'click'),
+                  'meta': payload.get('meta', {}),
+              }
 
-return {'ok': True, 's3_key': key, 'summary': summary}
+              table.put_item(Item=item)
 
+              return {
+                  "statusCode": 200,
+                  "headers": {"Content-Type": "application/json"},
+                  "body": json.dumps({"ok": True, "item": item})
+              }
 
-DailyAggregateRule:
-Type: AWS::Events::Rule
-Properties:
-ScheduleExpression: cron(0 0 * * ? *) # every day at 00:00 UTC
-State: ENABLED
-Targets:
-- Arn: !GetAtt AggregateFunction.Arn
-Id: TargetAggregate
+  IngestApi:
+    Type: AWS::ApiGatewayV2::Api
+    Properties:
+      Name: !Sub ${ProjectName}-${Env}-httpapi
+      ProtocolType: HTTP
 
+  IngestIntegration:
+    Type: AWS::ApiGatewayV2::Integration
+    Properties:
+      ApiId: !Ref IngestApi
+      IntegrationType: AWS_PROXY
+      IntegrationUri: !Sub arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${IngestFunction.Arn}/invocations
+      PayloadFormatVersion: '2.0'
 
-PermissionForEventsToInvokeAggregate:
-Type: AWS::Lambda::Permission
-Properties:
-FunctionName: !Ref AggregateFunction
-Action: lambda:InvokeFunction
-Principal: events.amazonaws.com
-SourceArn: !GetAtt DailyAggregateRule.Arn
+  IngestRoute:
+    Type: AWS::ApiGatewayV2::Route
+    Properties:
+      ApiId: !Ref IngestApi
+      RouteKey: 'POST /event'
+      Target: !Sub integrations/${IngestIntegration}
 
+  IngestStage:
+    Type: AWS::ApiGatewayV2::Stage
+    Properties:
+      ApiId: !Ref IngestApi
+      StageName: dev
+      AutoDeploy: true
 
-ErrorAlarm:
-Type: AWS::CloudWatch::Alarm
-Properties:
-AlarmName: !Sub ${ProjectName}-${Env}-lambda-errors
-ComparisonOperator: GreaterThanThreshold
-EvaluationPeriods: 1
-MetricName: Errors
-Namespace: AWS/Lambda
-Period: 300
-Statistic: Sum
-Threshold: 1
-Dimensions:
-- Name: FunctionName
-Value: !Ref IngestFunction
+  PermissionForAPIGatewayToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref IngestFunction
+      Action: lambda:InvokeFunction
+      Principal: apigateway.amazonaws.com
+      SourceArn: !Sub arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${IngestApi}/*/*/event
 
+  EventsTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub ${ProjectName}-${Env}-events
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pk
+          AttributeType: S
+        - AttributeName: ts
+          AttributeType: N
+      KeySchema:
+        - AttributeName: pk
+          KeyType: HASH
+        - AttributeName: ts
+          KeyType: RANGE
+
+  BackupBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub ${AWS::AccountId}-${ProjectName}-${Env}-backup
+      VersioningConfiguration:
+        Status: Enabled
+
+  AggregateFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub ${ProjectName}-${Env}-aggregate
+      Handler: index.lambda_handler
+      Runtime: python3.11
+      Role: !GetAtt AggregateFunctionRole.Arn
+      Timeout: 60
+      MemorySize: 512
+      Environment:
+        Variables:
+          TABLE_NAME: !Ref EventsTable
+          BUCKET_NAME: !Ref BackupBucket
+      Code:
+        ZipFile: |
+          import os, json, time
+          import boto3
+          from datetime import datetime
+
+          ddb = boto3.resource('dynamodb')
+          s3 = boto3.client('s3')
+
+          def lambda_handler(event, context):
+              table_name = os.environ['TABLE_NAME']
+              bucket = os.environ['BUCKET_NAME']
+              table = ddb.Table(table_name)
+
+              # Simple full scan (Free Tier demo). For prod, use GSI/time buckets.
+              now = int(time.time())
+              day_ago = now - 24*3600
+
+              resp = table.scan()
+              items = resp.get('Items', [])
+              items = [it for it in items if it.get('ts', 0) >= day_ago]
+
+              count = len(items)
+              by_type = {}
+              for it in items:
+                  et = it.get('event_type', 'unknown')
+                  by_type[et] = by_type.get(et, 0) + 1
+
+              summary = {
+                  'timestamp': datetime.utcnow().isoformat()+"Z",
+                  'count_24h': count,
+                  'by_event_type': by_type,
+              }
+
+              key = f"daily_summaries/{datetime.utcnow().strftime('%Y-%m-%d')}.json"
+              s3.put_object(Bucket=bucket, Key=key, Body=json.dumps(summary).encode('utf-8'))
+
+              return {'ok': True, 's3_key': key, 'summary': summary}
+
+  DailyAggregateRule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: cron(0 0 * * ? *)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt AggregateFunction.Arn
+          Id: TargetAggregate
+
+  PermissionForEventsToInvokeAggregate:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref AggregateFunction
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt DailyAggregateRule.Arn
+
+  ErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub ${ProjectName}-${Env}-lambda-errors
+      ComparisonOperator: GreaterThanThreshold
+      EvaluationPeriods: 1
+      MetricName: Errors
+      Namespace: AWS/Lambda
+      Period: 300
+      Statistic: Sum
+      Threshold: 1
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref IngestFunction
 
 Outputs:
-ApiBaseUrl:
-Value: !Sub https://${IngestApi}.execute-api.${AWS::Region}.amazonaws.com/dev
-Description: Base URL for POST /event
-TableName:
-Value: !Ref EventsTable
-BackupBucketName:
-Value: !Ref BackupBucket
+  ApiBaseUrl:
+    Value: !Sub https://${IngestApi}.execute-api.${AWS::Region}.amazonaws.com/dev
+    Description: Base URL for POST /event
+  TableName:
+    Value: !Ref EventsTable
+  BackupBucketName:
+    Value: !Ref BackupBucket
+### source .venv/bin/activate
