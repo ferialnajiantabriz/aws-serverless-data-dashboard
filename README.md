@@ -1,56 +1,96 @@
+# **AWS Serverless Data Dashboard (Event Ingestion + Daily Analytics Pipeline)**
 
-# AWS Serverless Data Dashboard (Cloud + Streamlit)
+A fully implemented, production-style **serverless analytics pipeline** built on AWS.
+This project ingests real-time events, stores them in DynamoDB, aggregates daily metrics using scheduled Lambdas, and visualizes results through a Streamlit dashboard.
 
-This project demonstrates a fully functional, production-style **AWS serverless pipeline** built using:
-
-- **API Gateway** – Public ingestion endpoint  
-- **Lambda (Python)** – Event processor & daily aggregator  
-- **DynamoDB** – Event storage  
-- **S3** – Daily summary backups  
-- **EventBridge** – Scheduled aggregation  
-- **CloudWatch** – Logs + alarms  
-- **Streamlit** – Local analytics dashboard  
-
-This system ingests events from any client, stores them in DynamoDB, generates daily rollups, and displays analytics.
+The system demonstrates practical cloud engineering ability, event-driven architecture, and hands-on deployment of multiple AWS services working together seamlessly.
 
 ---
 
-## Architecture
+## ** High-Level Overview**
+
+This pipeline follows a widely used pattern in real-world systems such as:
+
+* product analytics
+* marketing funnel tracking
+* IoT device events
+* user behavior monitoring
+* app telemetry pipelines
+
+**Flow:**
+
+1. Clients send events (click, signup, view, etc.)
+2. API Gateway receives and validates the request
+3. Lambda stores the event in DynamoDB
+4. EventBridge triggers a nightly aggregation
+5. Another Lambda builds a daily summary
+6. Summary JSON goes into S3
+7. Streamlit dashboard reads DynamoDB for analytics
+
+---
+
+## **🏗️ Architecture**
 
 ![Architecture](docs/architecture.png)
 
 ---
 
-## Features
+## **✨ Key Features**
 
-### **Event Ingestion**
-Send events via:
-```
+### ** Real-Time Event Ingestion API**
 
+A public HTTP endpoint handles event ingestion through API Gateway → Lambda → DynamoDB.
+
+Example request:
+
+```json
 POST /event
 {
-"source": "web",
-"event_type": "click",
-"meta": { "user": "demo" }
+  "source": "web",
+  "event_type": "click",
+  "meta": { "user": "demo" }
 }
+```
 
-````
+The ingestion Lambda automatically:
 
-### **Daily Aggregation**
-A second Lambda runs every night:
-- Reads the last 24 hours from DynamoDB  
-- Groups by `event_type`  
-- Saves a JSON summary to S3  
+* generates a unique primary key (`pk`)
+* assigns a timestamp (`ts`)
+* stores the event in DynamoDB
+* returns the saved record
 
-Sample output stored in S3:
+---
+
+### ** Automated Daily Aggregation**
+
+Every night at midnight UTC, EventBridge triggers an aggregation Lambda that:
+
+* scans DynamoDB for the last 24 hours
+* groups events by type
+* calculates counts
+* generates a summary document
+* uploads it to S3 in folder:
+
+```
+daily_summaries/YYYY-MM-DD.json
+```
+
+Example output from S3:
 
 ![Summary](docs/s3_summary_sample.png)
 
 ---
 
-## Local Analytics Dashboard (Streamlit)
+### ** Interactive Local Analytics Dashboard (Streamlit)**
 
-Run the dashboard:
+A lightweight UI for exploring the ingested data:
+
+* total event count
+* bar chart of event types
+* raw event table
+* auto-refreshes when new data arrives
+
+Run locally:
 
 ```bash
 source .venv/bin/activate
@@ -58,7 +98,7 @@ export AWS_REGION=us-east-1
 export TABLE_NAME=serverless-dashboard-dev-events
 cd src/streamlit_app
 streamlit run app.py
-````
+```
 
 Dashboard example:
 
@@ -66,58 +106,70 @@ Dashboard example:
 
 ---
 
-## 🛠️ Tech Stack
+## ** Tech Stack**
 
-* AWS Lambda (Python)
-* DynamoDB (NoSQL)
-* API Gateway HTTP API
-* EventBridge (cron scheduling)
-* S3 (data lake)
-* CloudFormation (IaC)
-* Streamlit (analytics UI)
+### **AWS Services**
+
+* **Lambda (Python)** — compute for ingestion & aggregation
+* **DynamoDB** — high-performance NoSQL event store
+* **API Gateway (HTTP API)** — public ingestion endpoint
+* **EventBridge** — nightly cron scheduler
+* **S3** — archive of daily rollups
+* **CloudWatch** — logging & alarms
+* **CloudFormation** — infrastructure-as-code
+
+### **Local Tools**
+
+* Streamlit (dashboard)
+* Python 3.12
 * boto3 (AWS SDK)
+* requests
 
 ---
 
-## 📦 Deployment
+## ** Deployment**
 
-Deploy the entire system:
+Deploy the full stack (Lambdas, API Gateway, DynamoDB, EventBridge, S3, IAM roles):
 
 ```bash
 ./scripts/deploy.sh us-east-1
 ```
 
-Remove it:
+Remove everything:
 
 ```bash
 ./scripts/teardown.sh us-east-1
 ```
 
----
-
-## Why This Project Matters
-
-This project showcases:
-
-* Cloud-native architecture
-* Infrastructure-as-code (CloudFormation)
-* AWS services integration
-* Serverless compute (Lambda)
-* Data ingestion + analytics
-* Observability (CloudWatch)
-* Real dashboard visualization
-
-
-````
-
----
-
-
-# Add → Commit → Push to GitHub
-
-From project root:
+Validate the CloudFormation template manually:
 
 ```bash
-git add .
-git commit -m "Add dashboard screenshot + README update"
-git push
+aws cloudformation validate-template \
+  --template-body file://template.yaml \
+  --region us-east-1
+```
+
+---
+
+## ** Repository Structure**
+
+```
+aws-serverless-data-dashboard/
+│
+├── src/
+│   ├── ingest/           # Lambda: event ingestion
+│   ├── aggregate/        # Lambda: daily aggregation
+│   └── streamlit_app/    # Local dashboard
+│
+├── scripts/
+│   ├── deploy.sh         # Automated stack deployment
+│   └── teardown.sh       # Automated resource cleanup
+│
+├── docs/
+│   ├── architecture.png
+│   ├── dashboard_sample.png
+│   ├── dynamodb_sample.png
+│   └── s3_summary_sample.png
+│
+├── template.yaml         # Full CloudFormation stack
+└── README.md
