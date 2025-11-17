@@ -7,7 +7,7 @@ The system demonstrates practical cloud engineering ability, event-driven archit
 
 ---
 
-## ** High-Level Overview**
+##  High-Level Overview
 
 This pipeline follows a widely used pattern in real-world systems such as:
 
@@ -29,15 +29,15 @@ This pipeline follows a widely used pattern in real-world systems such as:
 
 ---
 
-## **🏗️ Architecture**
+## Architecture
 
 ![Architecture](docs/architecture.png)
 
 ---
 
-## **✨ Key Features**
+## Key Features
 
-### ** Real-Time Event Ingestion API**
+### Real-Time Event Ingestion API
 
 A public HTTP endpoint handles event ingestion through API Gateway → Lambda → DynamoDB.
 
@@ -61,7 +61,7 @@ The ingestion Lambda automatically:
 
 ---
 
-### ** Automated Daily Aggregation**
+### Automated Daily Aggregation
 
 Every night at midnight UTC, EventBridge triggers an aggregation Lambda that:
 
@@ -81,7 +81,7 @@ Example output from S3:
 
 ---
 
-### ** Interactive Local Analytics Dashboard (Streamlit)**
+### Interactive Local Analytics Dashboard (Streamlit)
 
 A lightweight UI for exploring the ingested data:
 
@@ -106,7 +106,7 @@ Dashboard example:
 
 ---
 
-## ** Tech Stack**
+##  Tech Stack
 
 ### **AWS Services**
 
@@ -127,7 +127,7 @@ Dashboard example:
 
 ---
 
-## ** Deployment**
+##  Deployment
 
 Deploy the full stack (Lambdas, API Gateway, DynamoDB, EventBridge, S3, IAM roles):
 
@@ -151,7 +151,7 @@ aws cloudformation validate-template \
 
 ---
 
-## ** Repository Structure**
+##  Repository Structure
 
 ```
 aws-serverless-data-dashboard/
